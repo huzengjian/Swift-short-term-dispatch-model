@@ -23,7 +23,7 @@ maxInf = 50
 minPrice = 30
 maxPrice = 50
 
-init_fb = 960 # fb range [900-1000]
+init_fb = 936 # fb range [900-1000]
 
 M = 100000
 minVol = 389
@@ -59,7 +59,7 @@ def read_schedule_value(s):
     return m.getAttr('x', s)
 	
 	
-def printSolution(m, prices,inflows, gen_targets, out_file_name):
+def printSolution(m, prices, inflows, gen_targets, fb_targets, out_file_name):
 	avg_price = np.mean(prices)
 	if m.status != GRB.status.INFEASIBLE:
 		print('\nObjective by Gurobi: %g' % m.objVal)
@@ -69,6 +69,7 @@ def printSolution(m, prices,inflows, gen_targets, out_file_name):
 		schedules['Prices'] = prices
 		schedules['Inflows'] = inflows
 		schedules['Gen Targets'] = gen_targets
+		schedules['Fb Targets'] = fb_targets
 
 		qp_schedule = read_schedule_value(qp)
 		hk_schedule = read_schedule_value(hk)
@@ -92,9 +93,7 @@ def printSolution(m, prices,inflows, gen_targets, out_file_name):
 	else:
 		print 'Fail to find feasible solution, please check your inputs!'
 
-def build_model(days, init_fb, prices, inflows, gen_targets = [], gen_penalties = [], quad = False, water_val = False):
-	#print gen_targets
-	target = len(gen_targets) > 0
+def build_model(days, init_fb, prices, inflows, gen_targets = [], gen_penalties = [], fb_targets = [], quad = False, water_val = False):
 	m = Model("swift")
 	avg_price = np.mean(prices)
 	for i in range(days):
@@ -127,10 +126,12 @@ def build_model(days, init_fb, prices, inflows, gen_targets = [], gen_penalties 
 		m.addConstr(qs[i] <= maxSpillPct * qo[i], 'spill_{i}'.format(i=i)) # Spill <= maxSpillPct * Discharge
 		m.addConstr(hk[i] <= 14.36 + 0.907 * sqrt_vol[i], 'hk_vol_{i}'.format(i=i)) #hk =  14.36 + 0.907 * \sqrt(vol - 90)
 		m.addQConstr(sqrt_vol[i]*sqrt_vol[i] + 90.0 <= vol[i], 'sqrt_of_volume_{i}'.format(i=i))
+		if(len(fb_targets) > 0 and fb_targets[i] != 0): # 0 means not enforced
+			m.addConstr(vol[i] == Fb2Vol(fb_targets[i]), 'fb_target_{i}'.format(i=i))
 		if(quad):
 			m.addConstr(u[i] == (qp[i] + hk[i])/2)
 			m.addConstr(v[i] == (qp[i] - hk[i])/2)
-			if(target):
+			if(len(gen_targets) > 0):
 				penalty = gen_penalties[i].item()
 				target = gen_targets[i].item()
 				m.setPWLObj(u[i], uanchors, prices[i] * np.power(uanchors, 2) + penalty * (-4.0/3.0 * np.power(uanchors, 4) + 2 * target * np.power(uanchors, 2)))
@@ -143,9 +144,6 @@ def build_model(days, init_fb, prices, inflows, gen_targets = [], gen_penalties 
 				m.setPWLObj(v[i], vanchors, -prices[i] * np.power(vanchors, 2))
 
 	m.modelSense = GRB.MAXIMIZE
-	#m.setObjective(quicksum(qp[i] * hk[i] * prices[i].item() for i in xrange(days)))
-	#m.setObjective(quicksum(0.5 * (u[i] * u[i] - v[i] * v[i]) * prices[i].item() for i in xrange(days))) # doesn't work as the Object Q matrix is not PSD
-	
 	m.update()
 	return m
 
@@ -153,21 +151,36 @@ prices = np.random.uniform(minPrice, maxPrice, [days])
 inflows = np.random.uniform(minInf, maxInf, [days])
 gen_targets = np.random.uniform(800, 1500, [days])
 gen_penalties = np.random.uniform(genPenalty, genPenalty, [days])
+fb_targets = [0] * days
+fb_targets[days/2] = 930
+fb_targets[days-1] = 940
 
 try:			
-	m = build_model(days = days, prices = prices, init_fb = init_fb, inflows = inflows, gen_targets = gen_targets, gen_penalties = gen_penalties, quad = True, water_val = True)
+	m = build_model(
+		days = days, 
+		prices = prices, 
+		init_fb = init_fb, 
+		inflows = inflows, 
+		gen_targets = gen_targets, 
+		gen_penalties = gen_penalties, 
+		fb_targets = fb_targets, 
+		quad = True, 
+		water_val = True)
 	m.optimize()
-	printSolution(m, prices = prices, inflows = inflows, gen_targets = gen_targets, out_file_name = "swift_quad.csv")
+	printSolution(m, prices = prices, inflows = inflows, gen_targets = gen_targets, fb_targets = fb_targets, out_file_name = "swift_quad.csv")
 
-	m = build_model(days = days, prices = prices, init_fb = init_fb, inflows = inflows, gen_targets = gen_targets, gen_penalties = gen_penalties, quad = False, water_val = True)
-	m.optimize()
-	printSolution(m, prices = prices, inflows = inflows, gen_targets = gen_targets, out_file_name = "swift_linear.csv")
+	#m = build_model(days = days, prices = prices, init_fb = init_fb, inflows = inflows, gen_targets = gen_targets, gen_penalties = gen_penalties, quad = False, water_val = True)
+	#m.optimize()
+	#printSolution(m, prices = prices, inflows = inflows, gen_targets = gen_targets, out_file_name = "swift_linear.csv")
 except GurobiError as e:
 	print "Unexpected error:", sys.exc_info()[0], e
 	m.write('error_model.mps')
 
 
 """	
+	#m.setObjective(quicksum((u[i] * u[i] - v[i] * v[i]) * prices[i].item() for i in xrange(days)))
+	#m.setObjective(quicksum(0.5 * (u[i] * u[i] - v[i] * v[i]) * prices[i].item() for i in xrange(days))) # doesn't work as the Object Q matrix is not PSD
+
 	#print_lambda("lambda1", lmda1)
 	#print_lambda("lambda2", lmda2)
 
