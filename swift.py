@@ -5,38 +5,38 @@ import numpy as np
 import pandas as pd
 
 def Vol2Fb(vol):
-    return 704.4 + 11.325 * np.sqrt(vol - 90.0)
+    return 704.23078 + 11.32277 * np.sqrt(vol - 89.96) # fb range [900,1000]
 
 def Fb2Vol(fb):
-    return np.power((fb - 704.4)/11.325, 2) + 90.0
+    return 0.0078 *  fb * fb - 10.986 * fb + 3958.3 # vol range [388.9,772.3]
 
 def Vol2Hk(vol):
-	return 14.36 + 0.907 * np.sqrt(vol - 90.0)
+	return 14.36 + 0.907 * np.sqrt(vol - 89.96)
 	
-days = 30
+days = 90
 tailwater = 600
 baseHK = 35
 
-minInf = 20
-maxInf = 50
+minInf = 2
+maxInf = 10
 
 minPrice = 30
 maxPrice = 50
 
-init_fb = 936 # fb range [900-1000]
+init_fb = 936
 
 M = 100000
-minVol = 389
-maxVol = 755 #volume range (389 - 755)
+minVol = 388.9
+maxVol = 772.3 #volume range [388.9,772.3]
 maxHK = Vol2Hk(maxVol)
 minHK = Vol2Hk(minVol)
-minQo = 20
-maxQo = 80
-maxQoRamp = 20 #max discharge ramp
-maxSpillPct = 0.5
+minQo = 2
+maxQo = 8
+maxQoRamp = 2 #max discharge ramp
+maxSpillPct = 1
 
 genPenalty = 10
-nApprox = 50
+nApprox = 10
 
 vol = {}
 qo = {}
@@ -45,16 +45,11 @@ qs = {}
 #fb = {}
 #gn = {}
 hk = {}
-deviation = {}
+#deviation = {}
 u = {}
 v = {}
 sqrt_vol = {}
 
-lmda1 = {}
-lmda2 = {}
-
-
-	
 def read_schedule_value(s):
     return m.getAttr('x', s)
 	
@@ -112,10 +107,10 @@ def build_model(days, init_fb, prices, inflows, gen_targets = [], gen_penalties 
 	m.update()
 	m.addConstr(vol[0] == Fb2Vol(init_fb)) # initial volume
 
-	uanchors = np.linspace(minHK/2, (maxHK + maxQo)/2, nApprox)
-	vanchors = np.linspace(-maxHK/2, (maxQo - minHK)/2, nApprox)
-	hkanchors = np.linspace(minHK, maxHK, nApprox)
-	qpanchors = np.linspace(0, maxQo, nApprox)
+	ucoords = np.linspace(minHK/2, (maxHK + maxQo)/2, nApprox)
+	vcoords = np.linspace(-maxHK/2, (maxQo - minHK)/2, nApprox)
+	hkcoords = np.linspace(minHK, maxHK, nApprox)
+	qpcoords = np.linspace(0, maxQo, nApprox)
 	
 	for i in xrange(days - 1):
 		m.addConstr(vol[i+1] == vol[i] - qo[i] +  inflows[i].item(), 'volume_{i}'.format(i=i)) # water balance constraint
@@ -124,8 +119,8 @@ def build_model(days, init_fb, prices, inflows, gen_targets = [], gen_penalties 
 	for i in xrange(days):
 		m.addConstr(qo[i] == qp[i] + qs[i],'discharge_{i}'.format(i=i)) # Discharge = Turb Flow + Spill
 		m.addConstr(qs[i] <= maxSpillPct * qo[i], 'spill_{i}'.format(i=i)) # Spill <= maxSpillPct * Discharge
-		m.addConstr(hk[i] <= 14.36 + 0.907 * sqrt_vol[i], 'hk_vol_{i}'.format(i=i)) #hk =  14.36 + 0.907 * \sqrt(vol - 90)
-		m.addQConstr(sqrt_vol[i]*sqrt_vol[i] + 90.0 <= vol[i], 'sqrt_of_volume_{i}'.format(i=i))
+		m.addConstr(hk[i] <= 14.36 + 0.907 * sqrt_vol[i], 'hk_vol_{i}'.format(i=i)) #hk =  14.36 + 0.907 * \sqrt(vol - 89.96)
+		m.addQConstr(sqrt_vol[i]*sqrt_vol[i] + 89.96 <= vol[i], 'sqrt_of_volume_{i}'.format(i=i))
 		if(len(fb_targets) > 0 and fb_targets[i] != 0): # 0 means not enforced
 			m.addConstr(vol[i] == Fb2Vol(fb_targets[i]), 'fb_target_{i}'.format(i=i))
 		if(quad):
@@ -134,26 +129,27 @@ def build_model(days, init_fb, prices, inflows, gen_targets = [], gen_penalties 
 			if(len(gen_targets) > 0):
 				penalty = gen_penalties[i].item()
 				target = gen_targets[i].item()
-				m.setPWLObj(u[i], uanchors, prices[i] * np.power(uanchors, 2) + penalty * (-4.0/3.0 * np.power(uanchors, 4) + 2 * target * np.power(uanchors, 2)))
-				m.setPWLObj(v[i], vanchors, -prices[i] * np.power(vanchors, 2) + penalty * (-4.0/3.0 * np.power(vanchors, 4) - 2 * target * np.power(vanchors, 2)))
-				m.setPWLObj(qp[i], qpanchors, penalty * np.power(qpanchors, 4) / 6.0)
-				m.setPWLObj(hk[i], hkanchors, penalty * (np.power(hkanchors, 4) / 6.0 - target*target))
+				m.setPWLObj(u[i], ucoords, prices[i] * np.power(ucoords, 2) + penalty * (-4.0/3.0 * np.power(ucoords, 4) + 2 * target * np.power(ucoords, 2)))
+				m.setPWLObj(v[i], vcoords, -prices[i] * np.power(vcoords, 2) + penalty * (-4.0/3.0 * np.power(vcoords, 4) - 2 * target * np.power(vcoords, 2)))
+				m.setPWLObj(qp[i], qpcoords, penalty * np.power(qpcoords, 4) / 6.0)
+				m.setPWLObj(hk[i], hkcoords, penalty * (np.power(hkcoords, 4) / 6.0 - target*target))
 			else:
 				#PWL formulation
-				m.setPWLObj(u[i], uanchors, prices[i] * np.power(uanchors, 2))
-				m.setPWLObj(v[i], vanchors, -prices[i] * np.power(vanchors, 2))
+				m.setPWLObj(u[i], ucoords, prices[i] * np.power(ucoords, 2))
+				m.setPWLObj(v[i], vcoords, -prices[i] * np.power(vcoords, 2))
 
 	m.modelSense = GRB.MAXIMIZE
+	#m.setObjective(quicksum((u[i] * u[i] - v[i] * v[i]) * prices[i].item() for i in xrange(days)))
 	m.update()
 	return m
 
 prices = np.random.uniform(minPrice, maxPrice, [days])
 inflows = np.random.uniform(minInf, maxInf, [days])
-gen_targets = np.random.uniform(800, 1500, [days])
+gen_targets = np.random.uniform(100, 200, [days])
 gen_penalties = np.random.uniform(genPenalty, genPenalty, [days])
 fb_targets = [0] * days
-fb_targets[days/2] = 930
-fb_targets[days-1] = 940
+fb_targets[days/2] = 925
+fb_targets[days-1] = 965
 
 try:			
 	m = build_model(
@@ -161,8 +157,8 @@ try:
 		prices = prices, 
 		init_fb = init_fb, 
 		inflows = inflows, 
-		gen_targets = gen_targets, 
-		gen_penalties = gen_penalties, 
+		#gen_targets = gen_targets, 
+		#gen_penalties = gen_penalties, 
 		fb_targets = fb_targets, 
 		quad = True, 
 		water_val = True)
@@ -217,4 +213,17 @@ def print_schedule(name, s):
 		prices.append(np.random.uniform(basePrice - priceVar, basePrice + priceVar))
 	return prices
 
+if(sos2):
+				#SOS2 formulation
+				m.addConstr(u[i] == quicksum([lmda1[i,j] * x for x,j in zip(uanchors, xrange(nApprox))]))
+				m.addSOS(GRB.SOS_TYPE2, [lmda1[i,j] for j in xrange(nApprox)]) # \sum{\lambda(i)} == 1. exactly two nonzeros, and they must be adjacent
+				m.addConstr(quicksum([lmda1[i,j] for j in xrange(nApprox)]) == 1)
+				m.addConstr(v[i] == quicksum([lmda2[i,j] * x for x,j in zip(vanchors, xrange(nApprox))]))
+				m.addSOS(GRB.SOS_TYPE2, [lmda2[i,j] for j in xrange(nApprox)])
+				m.addConstr(quicksum([lmda2[i,j] for j in xrange(nApprox)]) == 1)	
+
+				
+	if(sos2):
+		obj =  quicksum(prices[i] *(quicksum([lmda1[i,j] * x * x for x,j in zip(uanchors, xrange(nApprox))]) -
+										   quicksum([lmda2[i,j] * x * x for x,j in zip(vanchors, xrange(nApprox))])) for i in xrange(hours))				
 """
